@@ -1,0 +1,345 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CheckersConfession</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font-family: Arial, sans-serif;
+      background: #101018; color: #f5f5fa;
+    }
+    header {
+      text-align: center; padding: 35px 16px 20px;
+    }
+    h1 { margin: 0; color: #c7a5ff; font-size: 32px; }
+    .sub { color: #aaa; margin-top: 10px; }
+    main { max-width: 650px; margin: auto; padding: 16px; }
+    .panel {
+      background: #1c1c29; border: 1px solid #333344;
+      border-radius: 16px; padding: 20px; margin-bottom: 18px;
+    }
+    textarea {
+      width: 100%; min-height: 130px; resize: vertical;
+      background: #11111b; color: white; border: 1px solid #444;
+      border-radius: 10px; padding: 13px; font: inherit;
+    }
+    button {
+      border: 0; border-radius: 9px; padding: 12px 16px;
+      background: #a77aff; color: #171020; font-weight: bold;
+      cursor: pointer; margin: 6px 4px 0 0;
+    }
+    button.secondary { background: #39394b; color: white; }
+    button.reject { background: #a83e52; color: white; }
+    button:disabled { opacity: .5; cursor: wait; }
+    .confession {
+      background: #252536; border-radius: 12px;
+      padding: 16px; margin: 12px 0; overflow-wrap: anywhere;
+    }
+    .muted { color: #aaa; font-size: 13px; }
+    .hidden { display: none; }
+    #message { min-height: 22px; color: #c7a5ff; }
+    footer { text-align: center; color: #777; padding: 25px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CheckersConfession</h1>
+    <p class="sub">Your thoughts. Your secrets. Your confession.</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Submit a confession</h2>
+      <p class="muted">Your confession is anonymous to the public. It will appear after approval.</p>
+      <textarea id="confessionText" maxlength="1000"
+        placeholder="Write your confession here..."></textarea>
+      <button id="submitBtn">Submit anonymously</button>
+      <p id="message" role="status"></p>
+    </section>
+
+    <section class="panel">
+      <h2>Approved confessions</h2>
+      <div id="publicList">Loading confessions...</div>
+    </section>
+
+    <section class="panel">
+      <h2>Admin</h2>
+      <p class="muted">Admin access is restricted to the site owner.</p>
+      <button id="loginBtn">Sign in with Google</button>
+      <button id="logoutBtn" class="secondary hidden">Sign out</button>
+      <div id="adminArea" class="hidden">
+        <h3>Pending confessions</h3>
+        <div id="pendingList">Loading...</div>
+      </div>
+      <p id="adminMessage" class="muted"></p>
+    </section>
+  </main>
+
+  <footer>CheckersConfession</footer>
+
+  <script type="module">
+    import { initializeApp } from
+      "https://www.gstatic.com/firebasejs/11.6.0/firebase-app.js";
+    import {
+      getAuth, signInAnonymously, GoogleAuthProvider,
+      signInWithPopup, signOut, onAuthStateChanged
+    } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-auth.js";
+    import {
+      getFirestore, collection, addDoc, query, where,
+      orderBy, onSnapshot, serverTimestamp, doc, updateDoc
+    } from "https://www.gstatic.com/firebasejs/11.6.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyD01CCnODRmV15yIezJfofP6o3s0MUBn74",
+      authDomain: "checkersconfession.firebaseapp.com",
+      projectId: "checkersconfession",
+      storageBucket: "checkersconfession.firebasestorage.app",
+      messagingSenderId: "755029961351",
+      appId: "1:755029961351:web:878955363ba3d3740c2622",
+      measurementId: "G-RELPMDCKS8"
+    };
+
+    const ADMIN_EMAIL = "azizisalwaysbetter@gmail.com";
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    const provider = new GoogleAuthProvider();
+
+    const $ = id => document.getElementById(id);
+    let isAdmin = false;
+
+    function showMessage(id, text) {
+      $(id).textContent = text;
+    }
+
+    function safeText(element, text) {
+      element.textContent = text;
+    }
+
+    // Anonymous sign-in for visitors.
+    signInAnonymously(auth).catch(error => {
+      showMessage("message", "Could not connect: " + error.message);
+    });
+
+    // Submit a confession for admin approval.
+    $("submitBtn").addEventListener("click", async () => {
+      const text = $("confessionText").value.trim();
+      if (!text) {
+        showMessage("message", "Please write a confession first.");
+        return;
+      }
+      if (text.length > 1000) return;
+
+      $("submitBtn").disabled = true;
+      try {
+        if (!auth.currentUser) throw new Error("Please wait and try again.");
+        await addDoc(collection(db, "confessions"), {
+          text,
+          status: "pending",
+          createdAt: serverTimestamp(),
+          authorUid: auth.currentUser.uid
+        });
+        $("confessionText").value = "";
+        showMessage("message", "Submitted! Your confession is awaiting approval.");
+      } catch (error) {
+        showMessage("message", "Submission failed: " + error.message);
+      } finally {
+        $("submitBtn").disabled = false;
+      }
+    });
+
+    // Show only approved confessions publicly.
+    const approvedQuery = query(
+      collection(db, "confessions"),
+      where("status", "==", "approved"),
+      orderBy("createdAt", "desc")
+    );
+
+    onSnapshot(approvedQuery, snapshot => {
+      const list = $("publicList");
+      list.replaceChildren();
+
+      if (snapshot.empty) {
+        list.textContent = "No approved confessions yet. Be the first to submit one!";
+        return;
+      }
+
+      snapshot.forEach(item => {
+        const data = item.data();
+        const card = document.createElement("article");
+        card.className = "confession";
+        const paragraph = document.createElement("p");
+        safeText(paragraph, data.text || "");
+        card.appendChild(paragraph);
+
+        const share = document.createElement("button");
+        share.className = "secondary";
+        share.textContent = "Share as image";
+        share.addEventListener("click", () => shareAsImage(data.text || ""));
+        card.appendChild(share);
+        list.appendChild(card);
+      });
+    }, error => {
+      $("publicList").textContent =
+        "Could not load confessions. Please try again later.";
+      console.error(error);
+    });
+
+    // Google sign-in and admin verification.
+    $("loginBtn").addEventListener("click", async () => {
+      try {
+        const result = await signInWithPopup(auth, provider);
+        if (result.user.email !== ADMIN_EMAIL) {
+          await signOut(auth);
+          showMessage("adminMessage", "This Google account is not authorized.");
+        }
+      } catch (error) {
+        showMessage("adminMessage", "Sign-in failed: " + error.message);
+      }
+    });
+
+    $("logoutBtn").addEventListener("click", async () => {
+      await signOut(auth);
+      signInAnonymously(auth).catch(console.error);
+    });
+
+    onAuthStateChanged(auth, user => {
+      isAdmin = !!user && !user.isAnonymous &&
+        user.email === ADMIN_EMAIL;
+
+      $("adminArea").classList.toggle("hidden", !isAdmin);
+      $("logoutBtn").classList.toggle("hidden", !isAdmin);
+      $("loginBtn").classList.toggle("hidden", isAdmin);
+
+      if (isAdmin) {
+        showMessage("adminMessage", "Signed in as admin.");
+        loadPending();
+      } else {
+        $("pendingList").textContent = "";
+      }
+    });
+
+    // Admin-only pending confession list.
+    let stopPendingListener = null;
+    function loadPending() {
+      if (stopPendingListener) stopPendingListener();
+
+      const pendingQuery = query(
+        collection(db, "confessions"),
+        where("status", "==", "pending"),
+        orderBy("createdAt", "asc")
+      );
+
+      stopPendingListener = onSnapshot(pendingQuery, snapshot => {
+        if (!isAdmin) return;
+        const list = $("pendingList");
+        list.replaceChildren();
+
+        if (snapshot.empty) {
+          list.textContent = "No pending confessions.";
+          return;
+        }
+
+        snapshot.forEach(item => {
+          const data = item.data();
+          const card = document.createElement("article");
+          card.className = "confession";
+          const paragraph = document.createElement("p");
+          safeText(paragraph, data.text || "");
+          card.appendChild(paragraph);
+
+          const approve = document.createElement("button");
+          approve.textContent = "Approve";
+          approve.addEventListener("click", () =>
+            changeStatus(item.id, "approved"));
+          card.appendChild(approve);
+
+          const reject = document.createElement("button");
+          reject.textContent = "Reject";
+          reject.className = "reject";
+          reject.addEventListener("click", () =>
+            changeStatus(item.id, "rejected"));
+          card.appendChild(reject);
+
+          list.appendChild(card);
+        });
+      }, error => {
+        showMessage("adminMessage", "Could not load pending items: " + error.message);
+      });
+    }
+
+    async function changeStatus(id, status) {
+      if (!isAdmin) return;
+      try {
+        await updateDoc(doc(db, "confessions", id), { status });
+      } catch (error) {
+        showMessage("adminMessage", "Update failed: " + error.message);
+      }
+    }
+
+    // Create a shareable confession image.
+    async function shareAsImage(text) {
+      const canvas = document.createElement("canvas");
+      canvas.width = 1080;
+      canvas.height = 1080;
+      const ctx = canvas.getContext("2d");
+
+      ctx.fillStyle = "#101018";
+      ctx.fillRect(0, 0, 1080, 1080);
+      ctx.fillStyle = "#c7a5ff";
+      ctx.font = "bold 58px Arial";
+      ctx.textAlign = "center";
+      ctx.fillText("CheckersConfession", 540, 180);
+
+      ctx.fillStyle = "#ffffff";
+      ctx.font = "42px Arial";
+      const words = text.split(/\s+/);
+      const lines = [];
+      let line = "";
+      for (const word of words) {
+        const test = line ? line + " " + word : word;
+        if (ctx.measureText(test).width > 850 && line) {
+          lines.push(line);
+          line = word;
+        } else {
+          line = test;
+        }
+      }
+      if (line) lines.push(line);
+
+      const visibleLines = lines.slice(0, 10);
+      const lineHeight = 58;
+      const startY = 500 - (visibleLines.length * lineHeight) / 2;
+      visibleLines.forEach((value, index) => {
+        ctx.fillText(value, 540, startY + index * lineHeight);
+      });
+
+      ctx.fillStyle = "#999999";
+      ctx.font = "28px Arial";
+      ctx.fillText("Shared anonymously", 540, 900);
+
+      canvas.toBlob(async blob => {
+        if (!blob) return;
+        const file = new File([blob], "confession.png", { type: "image/png" });
+        try {
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            await navigator.share({ files: [file], title: "CheckersConfession" });
+          } else {
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = "confession.png";
+            link.click();
+            URL.revokeObjectURL(url);
+          }
+        } catch (error) {
+          if (error.name !== "AbortError") alert("Could not share the image.");
+        }
+      }, "image/png");
+    }
+  </script>
+</body>
+</html>
